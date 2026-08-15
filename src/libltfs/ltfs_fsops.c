@@ -66,6 +66,7 @@
 #include "dcache.h"
 #include "pathname.h"
 #include "index_criteria.h"
+#include "readahead.h"
 #include "arch/time_internal.h"
 
 int ltfs_fsops_open(const char *path, bool open_write, bool use_iosched, struct dentry **d,
@@ -470,6 +471,9 @@ int ltfs_fsops_unlink(const char *path, ltfs_file_id *id, struct ltfs_volume *vo
 		ret = -LTFS_WORM_ENABLED;
 		goto out;
 	}
+
+	if (readahead_initialized(vol))
+		readahead_invalidate(d, vol);
 
 	/* Can't remove non-empty directories */
 	if (d->isdir) {
@@ -1411,6 +1415,14 @@ int ltfs_fsops_readdir(struct dentry *d, void *buf, ltfs_dir_filler filler, void
 	}
 
 	releaseread_mrsw(&vol->lock);
+
+	/* A readdir is a strong hint that the caller is about to walk the
+	 * directory (ls -l, grep -r, tar, cp -r, ...). Queue its small files
+	 * for tape-sorted prefetch in the background. Cheap on miss; no-op if
+	 * the readahead subsystem isn't enabled. */
+	if (ret == 0 && readahead_initialized(vol))
+		readahead_hint_dir(d, vol);
+
 	return ret;
 }
 
@@ -1763,6 +1775,11 @@ int ltfs_fsops_write(struct dentry *d, const char *buf, size_t count, off_t offs
 		return -LTFS_WORM_ENABLED;
 	}
 
+	/* Any cached prefetch content is now stale. Invalidate before the
+	 * write so a racing reader can't grab the old bytes. */
+	if (readahead_initialized(vol))
+		readahead_invalidate(d, vol);
+
 	/* We don't check for device read-only here because the I/O scheduler and ltfs_fsraw_write()
 	 * both know to do that themselves.
 	 * We don't check for unit ready here because this call guarantees a write request later,
@@ -1798,6 +1815,17 @@ ssize_t ltfs_fsops_read(struct dentry *d, char *buf, size_t count, off_t offset,
 	if (d->isdir)
 		return -LTFS_ISDIRECTORY;
 
+	/* Try the prefetch cache first. If the whole file was prefetched into
+	 * RAM we can service the read without touching the tape at all. The
+	 * cache is only populated for clean files (no pending iosched writes),
+	 * and any write/truncate/unlink invalidates the entry, so serving from
+	 * it is equivalent to going through iosched_read for these files. */
+	if (readahead_initialized(vol)) {
+		ret = readahead_try_read(d, buf, count, offset, vol);
+		if (ret >= 0)
+			return ret;
+	}
+
 	if (iosched_initialized(vol))
 		ret = iosched_read(d, buf, count, offset, vol);
 	else
@@ -1826,6 +1854,9 @@ int ltfs_fsops_truncate(struct dentry *d, off_t length, struct ltfs_volume *vol)
 		ltfsmsg(LTFS_ERR, 17237E, "truncate");
 		return -LTFS_WORM_ENABLED;
 	}
+
+	if (readahead_initialized(vol))
+		readahead_invalidate(d, vol);
 
 	ret = ltfs_test_unit_ready(vol);
 	if (ret < 0) {

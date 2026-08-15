@@ -407,6 +407,7 @@ struct ltfs_volume {
 	void *dcache_handle;           /**< Handle to the Dentry cache manager state */
 	void *periodic_sync_handle;    /**< Handle to the periodic sync state */
 	void *kmi_handle;              /**< Handle to the key manager interface state */
+	void *readahead_handle;        /**< Handle to the readahead/prefetch state */
 
 	/* Internal state variables */
 	struct device_data *device;        /**< Device-specific data */

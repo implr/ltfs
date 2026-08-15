@@ -60,6 +60,7 @@
 #include "libltfs/pathname.h"
 #include "libltfs/xattr.h"
 #include "libltfs/periodic_sync.h"
+#include "libltfs/readahead.h"
 #include "libltfs/arch/time_internal.h"
 #include "libltfs/arch/errormap.h"
 #include "libltfs/kmi.h"
@@ -1134,6 +1135,9 @@ void * ltfs_fuse_mount(struct fuse_conn_info *conn)
 	if (priv->sync_type == LTFS_SYNC_TIME)
 		periodic_sync_thread_init(priv->sync_time, priv->data);
 
+	/* Opt-in readahead / prefetch cache (via LTFS_READAHEAD_MB env var). */
+	readahead_init(priv->data);
+
 	ltfs_request_trace(FUSE_REQ_EXIT(REQ_MOUNT), (uint64_t)priv, 0);
 
 	return priv;
@@ -1148,6 +1152,9 @@ void ltfs_fuse_umount(void *userdata)
 	struct ltfs_fuse_data *priv = userdata;
 
 	ltfs_request_trace(FUSE_REQ_ENTER(REQ_UNMOUNT), 0, 0);
+
+	if (readahead_initialized(priv->data))
+		readahead_destroy(priv->data);
 
 	if (periodic_sync_thread_initialized(priv->data))
 		periodic_sync_thread_destroy(priv->data);
