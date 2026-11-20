@@ -1774,6 +1774,11 @@ int tape_set_cart_coherency(struct device_data *dev, const tape_partition_t part
 	CHECK_ARG_NULL(dev, -LTFS_NULL_ARG);
 	CHECK_ARG_NULL(dev->backend, -LTFS_NULL_ARG);
 
+	/* Zero the whole buffer so no uninitialized stack data leaks
+         * onto the tape. In particular, on POSIX strncpy will not
+         * write a null terminator. */
+	memset(coh_data, 0, sizeof(coh_data));
+
 	ltfs_u16tobe(coh_data, TC_MAM_PAGE_COHERENCY);
 	coh_data[2]  = 0;
 	ltfs_u16tobe(coh_data + 3, TC_MAM_PAGE_COHERENCY_SIZE);
